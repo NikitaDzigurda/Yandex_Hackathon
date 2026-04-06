@@ -1,0 +1,24 @@
+{
+  "team_name": "Название команды",
+  "created_at": "",
+  "members": [
+    {
+      "name": "Имя Фамилия 1",
+      "email": "email1@example.com",
+      "role": "capitan",
+      "sourcecraft_username": ""
+    },
+    {
+      "name": "Имя Фамилия 2",
+      "email": "email2@example.com",
+      "role": "member",
+      "sourcecraft_username": ""
+    },
+    {
+      "name": "Имя Фамилия 3",
+      "email": "email3@example.com",
+      "role": "member",
+      "sourcecraft_username": ""
+    }
+  ]
+}

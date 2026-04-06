@@ -1,0 +1,33 @@
+# Зависимости
+node_modules/
+__pycache__/
+*.pyc
+
+# Логи
+*.log
+logs/
+
+# Временные файлы
+*.tmp
+*.temp
+
+# Конфигурации с секретами
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AI Agent (results обновляются автоматически)
+.ai-evaluation/results/
+.ai-evaluation/cache/
+
+# Личные заметки
+*.notes
+*.todo
