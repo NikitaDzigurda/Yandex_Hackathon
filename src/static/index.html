@@ -89,8 +89,18 @@
     <h2>Секция 7 — Сводка проекта</h2>
     <label>ID проекта</label>
     <input id="project_id" />
-    <button onclick="getProjectStatus()">Получить сводку</button>
+    <button onclick="loadProjectStatus()">Получить сводку</button>
     <div id="project_status_result" class="result"></div>
+    <div class="mt-4">
+      <h5>Задачи в трекере</h5>
+      <div id="statusTrackerTasks" class="result"></div>
+    </div>
+    <div class="mt-4">
+      <h5>Журнал действий агентов (Agent Traces)</h5>
+      <div id="statusAgentLogs" class="bg-dark text-light p-3 rounded" style="font-family: monospace; font-size: 0.9em; max-height: 300px; overflow-y: auto;">
+        <!-- Сюда JS будет вставлять логи -->
+      </div>
+    </div>
   </section>
 
   <script>
@@ -228,14 +238,53 @@
       }
     }
 
-    async function getProjectStatus() {
+    async function loadProjectStatus() {
       const id = document.getElementById("project_id").value.trim();
       if (!id) return setResult("project_status_result", "Введите ID проекта", true);
       try {
         const data = await request(`/api/v1/projects/${id}/status`);
-        setResult("project_status_result", data);
+        setResult("project_status_result", {
+          project_id: data.project_id,
+          title: data.title,
+          status: data.status,
+          created_at: data.created_at
+        });
+
+        const tasksContainer = document.getElementById("statusTrackerTasks");
+        tasksContainer.innerHTML = "";
+        if (data.tracker_tasks && data.tracker_tasks.length > 0) {
+          data.tracker_tasks.forEach(task => {
+            tasksContainer.innerHTML += `<div style="margin-bottom: 8px;">
+              <strong>${task.key || task.id || "task"}</strong> — ${task.summary || task.title || "Без названия"}
+            </div>`;
+          });
+        } else {
+          tasksContainer.innerHTML = '<span style="color: #888;">Задачи в трекере не найдены.</span>';
+        }
+
+        const logsContainer = document.getElementById('statusAgentLogs');
+        logsContainer.innerHTML = '';
+
+        if (data.recent_agent_logs && data.recent_agent_logs.length > 0) {
+          data.recent_agent_logs.forEach(log => {
+            const date = new Date(log.created_at).toLocaleString();
+            let statusColor = log.status === 'success' ? '#4CAF50' : (log.status === 'error' ? '#F44336' : '#FFC107');
+
+            let logLine = `<div style="margin-bottom: 8px;">
+                <span style="color: #888;">[${date}]</span> 
+                <span style="color: #64B5F6; font-weight: bold;">[${String(log.agent_name || "agent").toUpperCase()}]</span> 
+                <span style="color: ${statusColor};">[${log.status}]</span> 
+                <span>${log.action || ""}</span>
+            </div>`;
+            logsContainer.innerHTML += logLine;
+          });
+        } else {
+          logsContainer.innerHTML = '<span style="color: #888;">Нет данных о действиях агентов.</span>';
+        }
       } catch (e) {
         setResult("project_status_result", e.message, true);
+        document.getElementById("statusTrackerTasks").innerHTML = "";
+        document.getElementById("statusAgentLogs").innerHTML = "";
       }
     }
   </script>
