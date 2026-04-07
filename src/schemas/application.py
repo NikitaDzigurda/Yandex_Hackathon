@@ -40,3 +40,12 @@ class IntakeResult(BaseModel):
     clarifying_questions: list[str]
     summary: str
     recommended_action: Literal["approve", "reject", "clarify"]
+
+
+class ResearchReport(BaseModel):
+    domain_overview: str
+    key_sources: list[dict]
+    hypotheses: list[dict]
+    risks: list[dict]
+    recommendations: str
+    confidence_score: float

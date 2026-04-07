@@ -139,15 +139,24 @@ class IntakeAgent:
         )
 
     async def _parse_response(self, raw: str) -> dict:
-        candidate = raw.strip()
-        if candidate.startswith("```"):
-            candidate = candidate.strip("`")
-            candidate = candidate.replace("json", "", 1).strip()
+        candidate = self._clean_json(raw)
         try:
             return json.loads(candidate)
         except json.JSONDecodeError as exc:
             logger.exception("Failed to parse intake response. Raw: %s", raw)
             raise IntakeParseError("Invalid JSON from intake model") from exc
+
+    def _clean_json(self, raw: str) -> str:
+        raw = raw.strip()
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            if len(lines) >= 3:
+                raw = "\n".join(lines[1:-1])
+            else:
+                raw = raw.strip("`")
+            if raw.startswith("json"):
+                raw = raw[4:]
+        return raw.strip()
 
     def _build_tracker_description(self, application: Application, result: IntakeResult) -> str:
         score_lines = "\n".join(

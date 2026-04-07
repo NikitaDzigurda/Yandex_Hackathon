@@ -24,3 +24,14 @@ class ProjectResponse(BaseModel):
 class ProjectDetailResponse(ProjectResponse):
     description: str | None
     applications: list[ApplicationResponse] = Field(default_factory=list)
+
+
+class ProjectStatusResponse(BaseModel):
+    project_id: UUID
+    title: str
+    status: str
+    application: dict | None
+    research_report: dict | None
+    tracker_tasks: list[dict]
+    recent_agent_logs: list[dict]
+    created_at: datetime
