@@ -54,7 +54,11 @@ class Application(Base):
     text: Mapped[str] = mapped_column(Text, nullable=False)
     attachments_url: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[ApplicationStatus] = mapped_column(
-        Enum(ApplicationStatus, name="application_status"),
+        Enum(
+            ApplicationStatus,
+            name="application_status",
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        ),
         nullable=False,
         default=ApplicationStatus.DRAFT,
     )
@@ -77,7 +81,14 @@ class AgentLog(Base):
     action: Mapped[str] = mapped_column(String(128), nullable=False)
     input_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     output_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    status: Mapped[AgentLogStatus] = mapped_column(Enum(AgentLogStatus, name="agent_log_status"), nullable=False)
+    status: Mapped[AgentLogStatus] = mapped_column(
+        Enum(
+            AgentLogStatus,
+            name="agent_log_status",
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        ),
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     project: Mapped["Project"] = relationship(back_populates="agent_logs")

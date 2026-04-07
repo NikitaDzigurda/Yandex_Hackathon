@@ -21,10 +21,40 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    application_status = sa.Enum("draft", "submitted", "scoring", "approved", "rejected", name="application_status")
-    agent_log_status = sa.Enum("pending", "success", "error", name="agent_log_status")
-    application_status.create(op.get_bind(), checkfirst=True)
-    agent_log_status.create(op.get_bind(), checkfirst=True)
+    op.execute(
+        """
+        DO $$ BEGIN
+            CREATE TYPE application_status AS ENUM ('draft', 'submitted', 'scoring', 'approved', 'rejected');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+        """
+    )
+    op.execute(
+        """
+        DO $$ BEGIN
+            CREATE TYPE agent_log_status AS ENUM ('pending', 'success', 'error');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+        """
+    )
+    application_status = postgresql.ENUM(
+        "draft",
+        "submitted",
+        "scoring",
+        "approved",
+        "rejected",
+        name="application_status",
+        create_type=False,
+    )
+    agent_log_status = postgresql.ENUM(
+        "pending",
+        "success",
+        "error",
+        name="agent_log_status",
+        create_type=False,
+    )
 
     op.create_table(
         "projects",
