@@ -7,12 +7,12 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from agents.intake import IntakeAgent
+from agents.intake import IntakeAgent, IntakeParseError
 from core.config import settings
 from db.base import get_db
 from db.models import Application, ApplicationStatus, Project
-from integrations.tracker import TrackerClient
-from integrations.yandex_cloud import YandexCloudAgentClient
+from integrations.tracker import TrackerAPIError, TrackerClient
+from integrations.yandex_cloud import YCAgentError, YandexCloudAgentClient
 from schemas.application import ApplicationCreate, ApplicationResponse, IntakeResult
 
 router = APIRouter(prefix="/applications", tags=["applications"])
@@ -69,3 +69,18 @@ async def trigger_intake(application_id: UUID, db: AsyncSession = Depends(get_db
         return await agent.process(application_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except IntakeParseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to parse intake model response: {exc}",
+        ) from exc
+    except YCAgentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Yandex Cloud agent invocation failed: {exc}",
+        ) from exc
+    except TrackerAPIError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Tracker API request failed: {exc}",
+        ) from exc
