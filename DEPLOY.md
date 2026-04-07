@@ -43,3 +43,30 @@ docker compose exec api alembic upgrade head
 ```bash
 docker compose down
 ```
+
+## Тестирование сквозного сценария
+
+```bash
+# 1. Открыть тестовый интерфейс:
+open http://localhost:8000
+
+# 2. Или через curl — подать заявку:
+curl -X POST http://localhost:8000/api/v1/applications \
+  -H "Content-Type: application/json" \
+  -d '{
+    "initiator_name": "Иван Петров",
+    "initiator_email": "ivan@example.com",
+    "title": "ИИ-диагностика ранних стадий диабета",
+    "text": "Предлагаем разработать систему ранней диагностики...",
+    "domain": "медицина"
+  }'
+
+# 3. Запустить Intake (подставить реальный ID):
+curl -X POST http://localhost:8000/api/v1/applications/{id}/trigger-intake
+
+# 4. Запустить Research:
+curl -X POST http://localhost:8000/api/v1/applications/{id}/trigger-research
+
+# 5. Получить отчёт:
+curl http://localhost:8000/api/v1/applications/{id}/report
+```

@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Yandex Hackathon Demo</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 1000px; margin: 24px auto; line-height: 1.4; }
+    section { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    h2 { margin-top: 0; }
+    label { display: block; margin-top: 8px; font-weight: 600; }
+    input, select, textarea, button { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+    textarea { min-height: 100px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .result { margin-top: 12px; white-space: pre-wrap; background: #f7f7f7; padding: 10px; border-radius: 6px; }
+    .error { color: #b00020; font-weight: 600; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { border: 1px solid #ccc; padding: 6px; text-align: left; }
+  </style>
+</head>
+<body>
+  <h1>Демо: Intake + Research</h1>
+
+  <section>
+    <h2>Секция 1 — Подать заявку</h2>
+    <label>Имя инициатора</label>
+    <input id="initiator_name" value="Иван Петров" />
+    <label>Email</label>
+    <input id="initiator_email" value="ivan@example.com" />
+    <label>Название проекта</label>
+    <input id="title" value="ИИ-диагностика ранних стадий диабета" />
+    <label>Домен</label>
+    <select id="domain">
+      <option>медицина</option>
+      <option>экология</option>
+      <option>наука</option>
+      <option>образование</option>
+      <option>культура</option>
+    </select>
+    <label>Текст заявки</label>
+    <textarea id="text">Предлагаем разработать систему ранней диагностики...</textarea>
+    <button onclick="submitApplication()">Подать заявку</button>
+    <div id="submit_result" class="result"></div>
+  </section>
+
+  <section>
+    <h2>Секция 2 — Статус заявки</h2>
+    <label>ID заявки</label>
+    <input id="application_id" />
+    <button onclick="checkStatus()">Проверить статус</button>
+    <div id="status_result" class="result"></div>
+    <div id="scorecard_table"></div>
+  </section>
+
+  <section>
+    <h2>Секция 3 — Запустить агентов</h2>
+    <div class="row">
+      <button onclick="triggerIntake()">Запустить Intake</button>
+      <button onclick="triggerResearch()">Запустить Research</button>
+    </div>
+    <div id="agents_result" class="result"></div>
+  </section>
+
+  <section>
+    <h2>Секция 4 — Research отчёт</h2>
+    <button onclick="getReport()">Получить отчёт</button>
+    <div id="report_result" class="result"></div>
+  </section>
+
+  <section>
+    <h2>Секция 5 — Решение РП</h2>
+    <div class="row">
+      <label><input type="radio" name="decision" value="approve" checked /> Одобрить</label>
+      <label><input type="radio" name="decision" value="reject" /> Отклонить</label>
+    </div>
+    <label>Комментарий РП</label>
+    <textarea id="pm_comment">Решение согласовано после review.</textarea>
+    <button onclick="submitDecision()">Принять решение</button>
+    <div id="decision_result" class="result"></div>
+  </section>
+
+  <section>
+    <h2>Секция 6 — Демо данные</h2>
+    <button onclick="seedDemo()">Загрузить демо заявки</button>
+    <div id="demo_result" class="result"></div>
+  </section>
+
+  <section>
+    <h2>Секция 7 — Сводка проекта</h2>
+    <label>ID проекта</label>
+    <input id="project_id" />
+    <button onclick="getProjectStatus()">Получить сводку</button>
+    <div id="project_status_result" class="result"></div>
+  </section>
+
+  <script>
+    function setResult(id, value, isError = false) {
+      const el = document.getElementById(id);
+      el.className = isError ? "result error" : "result";
+      el.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    }
+
+    async function request(url, options = {}) {
+      const resp = await fetch(url, options);
+      const text = await resp.text();
+      let data = {};
+      try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+      if (!resp.ok) throw new Error(data.detail || JSON.stringify(data));
+      return data;
+    }
+
+    async function submitApplication() {
+      try {
+        const payload = {
+          initiator_name: document.getElementById("initiator_name").value,
+          initiator_email: document.getElementById("initiator_email").value,
+          title: document.getElementById("title").value,
+          text: document.getElementById("text").value,
+          domain: document.getElementById("domain").value,
+          attachments_url: []
+        };
+        const data = await request("/api/v1/applications", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        document.getElementById("application_id").value = data.id;
+        setResult("submit_result", `Заявка создана. ID: ${data.id}`);
+      } catch (e) {
+        setResult("submit_result", e.message, true);
+      }
+    }
+
+    async function checkStatus() {
+      const id = document.getElementById("application_id").value.trim();
+      if (!id) return setResult("status_result", "Введите ID заявки", true);
+      try {
+        const data = await request(`/api/v1/applications/${id}`);
+        setResult("status_result", data);
+        renderScorecard(data.scorecard);
+      } catch (e) {
+        setResult("status_result", e.message, true);
+        document.getElementById("scorecard_table").innerHTML = "";
+      }
+    }
+
+    function renderScorecard(scorecard) {
+      if (!scorecard || !scorecard.items || !Array.isArray(scorecard.items)) {
+        document.getElementById("scorecard_table").innerHTML = "";
+        return;
+      }
+      const rows = scorecard.items.map(item =>
+        `<tr><td>${item.criterion || ""}</td><td>${item.score || ""}</td><td>${item.rationale || ""}</td></tr>`
+      ).join("");
+      document.getElementById("scorecard_table").innerHTML = `
+        <table>
+          <thead><tr><th>Критерий</th><th>Балл</th><th>Обоснование</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    async function triggerIntake() {
+      const id = document.getElementById("application_id").value.trim();
+      if (!id) return setResult("agents_result", "Введите ID заявки", true);
+      try {
+        const data = await request(`/api/v1/applications/${id}/trigger-intake`, { method: "POST" });
+        setResult("agents_result", data);
+      } catch (e) {
+        setResult("agents_result", e.message, true);
+      }
+    }
+
+    async function triggerResearch() {
+      const id = document.getElementById("application_id").value.trim();
+      if (!id) return setResult("agents_result", "Введите ID заявки", true);
+      try {
+        const data = await request(`/api/v1/applications/${id}/trigger-research`, { method: "POST" });
+        setResult("agents_result", data);
+      } catch (e) {
+        setResult("agents_result", e.message, true);
+      }
+    }
+
+    async function getReport() {
+      const id = document.getElementById("application_id").value.trim();
+      if (!id) return setResult("report_result", "Введите ID заявки", true);
+      try {
+        const data = await request(`/api/v1/applications/${id}/report`);
+        const hypotheses = (data.hypotheses || [])
+          .map(h => `#${h.priority} [${h.risk}] ${h.statement}`)
+          .join("\n");
+        setResult("report_result", {
+          domain_overview: data.domain_overview,
+          hypotheses,
+          recommendations: data.recommendations,
+          confidence_score: data.confidence_score
+        });
+      } catch (e) {
+        setResult("report_result", e.message, true);
+      }
+    }
+
+    async function submitDecision() {
+      const id = document.getElementById("application_id").value.trim();
+      if (!id) return setResult("decision_result", "Введите ID заявки", true);
+      const comment = document.getElementById("pm_comment").value;
+      if (!comment.trim()) return setResult("decision_result", "Комментарий РП обязателен", true);
+      const decisionEl = document.querySelector('input[name="decision"]:checked');
+      try {
+        const data = await request(`/api/v1/applications/${id}/decision`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ decision: decisionEl.value, comment })
+        });
+        setResult("decision_result", data);
+      } catch (e) {
+        setResult("decision_result", e.message, true);
+      }
+    }
+
+    async function seedDemo() {
+      try {
+        const data = await request("/api/v1/demo/seed", { method: "POST" });
+        setResult("demo_result", data);
+      } catch (e) {
+        setResult("demo_result", e.message, true);
+      }
+    }
+
+    async function getProjectStatus() {
+      const id = document.getElementById("project_id").value.trim();
+      if (!id) return setResult("project_status_result", "Введите ID проекта", true);
+      try {
+        const data = await request(`/api/v1/projects/${id}/status`);
+        setResult("project_status_result", data);
+      } catch (e) {
+        setResult("project_status_result", e.message, true);
+      }
+    }
+  </script>
+</body>
+</html>
