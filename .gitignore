@@ -13,6 +13,8 @@ logs/
 
 # Конфигурации с секретами
 .env
+.agent
+.Agent
 
 # IDE
 .idea/

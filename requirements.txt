@@ -1,0 +1,10 @@
+sqlalchemy[asyncio]
+asyncpg
+alembic
+pydantic-settings
+fastapi
+uvicorn
+httpx
+redis
+structlog
+psycopg[binary]
