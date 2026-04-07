@@ -11,11 +11,13 @@ RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \
     pydantic-settings \
-    sqlalchemy \
+    sqlalchemy[asyncio] \
+    asyncpg \
     alembic \
     httpx \
     redis \
     structlog \
-    psycopg[binary]
+    psycopg[binary] \
+    email-validator
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

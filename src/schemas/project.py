@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from schemas.application import ApplicationResponse
 
@@ -23,4 +23,4 @@ class ProjectResponse(BaseModel):
 
 class ProjectDetailResponse(ProjectResponse):
     description: str | None
-    applications: list[ApplicationResponse] = []
+    applications: list[ApplicationResponse] = Field(default_factory=list)
