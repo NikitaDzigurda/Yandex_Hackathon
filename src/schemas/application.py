@@ -43,9 +43,23 @@ class IntakeResult(BaseModel):
 
 
 class ResearchReport(BaseModel):
-    domain_overview: str
-    key_sources: list[dict]
-    hypotheses: list[dict]
-    risks: list[dict]
-    recommendations: str
-    confidence_score: float
+    # Simple research format (fallback path)
+    domain_overview: str | None = None
+    key_sources: list[dict] | None = None
+    hypotheses: list[dict] | None = None
+    risks: list[dict] | None = None
+    recommendations: str | None = None
+    confidence_score: float | None = None
+
+    # Deep research format
+    source: str | None = None
+    project_name: str | None = None
+    decision: str | None = None
+    feasibility_score: float | None = None
+    quality_score: float | None = None
+    completeness_score: float | None = None
+    executive_summary: str | None = None
+    final_report: str | None = None
+    duration_sec: float | None = None
+    agents_completed: int | None = None
+    agents_total: int | None = None

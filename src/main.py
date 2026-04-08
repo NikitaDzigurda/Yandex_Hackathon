@@ -14,6 +14,7 @@ from sqlalchemy import text
 from agents.orchestrator import Orchestrator
 from api.router import api_router
 from core.config import settings
+from db.base import Base
 from db.base import engine
 from integrations.tracker import TrackerClient
 from integrations.yandex_cloud import YandexCloudAgentClient
@@ -22,8 +23,10 @@ from integrations.yandex_cloud import YandexCloudAgentClient
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     orchestrator = Orchestrator()
-    async with engine.connect() as connection:
+    async with engine.begin() as connection:
         await connection.execute(text("SELECT 1"))
+        # Dev-safe fallback: ensure schema exists even if migrations were skipped.
+        await connection.run_sync(Base.metadata.create_all)
     orchestrator_task = asyncio.create_task(orchestrator.run())
     yield
     orchestrator_task.cancel()

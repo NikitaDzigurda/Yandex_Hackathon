@@ -1,5 +1,7 @@
 """Research Agent implementation."""
 
+from __future__ import annotations
+
 import json
 import logging
 import uuid
@@ -9,8 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.intake import IntakeParseError
+from core.config import settings
 from db.models import AgentLog, AgentLogStatus, Application, ApplicationStatus, Document, Task
-from integrations.tracker import TrackerClient
+from integrations.tracker import TrackerAPIError, TrackerClient
 from integrations.yandex_cloud import YandexCloudAgentClient
 from schemas.application import ResearchReport
 
@@ -64,16 +67,39 @@ class ResearchAgent:
     def __init__(self, yc_client: YandexCloudAgentClient, tracker_client: TrackerClient, db_session: AsyncSession):
         self.yc_client = yc_client
         self.tracker_client = tracker_client
-        self.db_session = db_session
+        self.db = db_session
+        self._use_deep_research = self._check_deep_research_available()
+
+    def _check_deep_research_available(self) -> bool:
+        required = [
+            settings.yandex_api_key,
+            settings.yandex_project_id,
+            settings.agent_project_analyst_id,
+            settings.agent_research_strategist_id,
+            settings.agent_technical_researcher_id,
+            settings.agent_architect_id,
+            settings.agent_roadmap_manager_id,
+            settings.agent_hr_specialist_id,
+            settings.agent_risk_analyst_id,
+            settings.agent_quality_reviewer_id,
+            settings.agent_synthesis_manager_id,
+        ]
+        return all(value and value.strip() for value in required)
 
     async def process(self, application_id: UUID) -> dict:
-        result = await self.db_session.execute(select(Application).where(Application.id == application_id))
+        result = await self.db.execute(select(Application).where(Application.id == application_id))
         application = result.scalar_one_or_none()
         if application is None:
             raise ValueError(f"Application not found: {application_id}")
         if application.status not in {ApplicationStatus.SCORING, ApplicationStatus.APPROVED}:
             raise ValueError("Application must be in scoring or approved status for research")
 
+        tracker_context = await self._build_tracker_context(application.project_id)
+        if self._use_deep_research:
+            return await self._run_deep_research(application, tracker_context)
+        return await self._run_simple_research(application)
+
+    async def _run_simple_research(self, application: Application) -> dict:
         user_message = await self._build_user_message(application)
         model_uri = self.yc_client.build_model_uri("yandexgpt-pro")
         raw = await self.yc_client.invoke_agent(
@@ -84,32 +110,22 @@ class ResearchAgent:
         parsed = self._parse_response(raw)
         report = ResearchReport.model_validate(parsed)
         report_dict = report.model_dump(mode="json")
+        await self._save_report(application, report_dict)
 
-        self.db_session.add(
-            Document(
-                project_id=application.project_id,
-                agent_name="research",
-                doc_type="research_report",
-                title=f"Research report for {application.title}",
-                content=json.dumps(report_dict, ensure_ascii=False),
-                version=1,
-            )
-        )
-
-        self.db_session.add(
+        self.db.add(
             AgentLog(
                 project_id=application.project_id,
                 correlation_id=uuid.uuid4(),
                 agent_name="research",
                 stage="research",
                 action="process_application",
-                input_payload={"application_id": str(application_id)},
+                input_payload={"application_id": str(application.id)},
                 output_payload=report_dict,
                 status=AgentLogStatus.SUCCESS,
             )
         )
 
-        task_result = await self.db_session.execute(
+        task_result = await self.db.execute(
             select(Task)
             .where(Task.project_id == application.project_id, Task.tracker_issue_id.is_not(None))
             .order_by(Task.created_at.desc())
@@ -117,10 +133,48 @@ class ResearchAgent:
         )
         tracker_task = task_result.scalar_one_or_none()
         if tracker_task and tracker_task.tracker_issue_id:
-            await self._save_to_tracker(tracker_task.tracker_issue_id, report_dict)
+            try:
+                await self._save_to_tracker(tracker_task.tracker_issue_id, report_dict)
+            except TrackerAPIError as exc:
+                logger.warning("tracker_unavailable_research_simple", extra={"error": str(exc)})
 
-        await self.db_session.commit()
+        await self.db.commit()
         return report_dict
+
+    async def _run_deep_research(self, application: Application, tracker_context: str) -> dict:
+        from agents.deep_research import run_deep_research_async
+
+        result = await run_deep_research_async(
+            project_description=self._build_project_description(application),
+            tracker_context=tracker_context,
+            source_craft_context="",
+            artifact_dir=None,
+            print_agent_outputs=settings.print_full_agent_outputs,
+            continue_on_agent_error=True,
+        )
+
+        report_data = {
+            "source": "deep_research",
+            "project_name": result.get("project_name"),
+            "decision": result.get("decision"),
+            "feasibility_score": result.get("feasibility_score"),
+            "quality_score": result.get("quality_score"),
+            "completeness_score": result.get("completeness_score"),
+            "executive_summary": result.get("executive_summary"),
+            "final_report": result.get("final_report"),
+            "duration_sec": result.get("duration_sec"),
+            "agents_completed": len([item for item in result.get("agent_runs", []) if item.get("success")]),
+            "agents_total": len(result.get("agent_runs", [])),
+        }
+
+        await self._save_report(application, report_data)
+        await self._log_agent_runs(application, result.get("agent_runs", []))
+        try:
+            await self._post_to_tracker(application, report_data)
+        except TrackerAPIError as exc:
+            logger.warning("tracker_unavailable_research_deep", extra={"error": str(exc)})
+        await self.db.commit()
+        return report_data
 
     async def _build_user_message(self, application: Application) -> str:
         return (
@@ -130,6 +184,80 @@ class ResearchAgent:
             f"Summary от Intake:\n{application.summary or 'Не заполнено'}\n\n"
             "Сформируй структурированный research report строго в JSON."
         )
+
+    def _build_project_description(self, application: Application) -> str:
+        return (
+            f"{application.title}\n\n"
+            f"Домен: {application.domain}\n"
+            f"Инициатор: {application.initiator_name}\n\n"
+            f"Описание:\n{application.text}\n\n"
+            f"Summary от intake:\n{application.summary or 'Не заполнено'}"
+        )
+
+    async def _build_tracker_context(self, project_id: UUID) -> str:
+        task_result = await self.db.execute(
+            select(Task).where(Task.project_id == project_id, Task.tracker_issue_id.is_not(None))
+        )
+        issue_keys = [item.tracker_issue_id for item in task_result.scalars().all() if item.tracker_issue_id]
+        if not issue_keys:
+            return ""
+        issues = await self.tracker_client.list_issues(settings.tracker_queue_key)
+        selected = [item for item in issues if item.get("key") in issue_keys]
+        return json.dumps(selected, ensure_ascii=False, indent=2)
+
+    async def _save_report(self, application: Application, report_data: dict) -> None:
+        self.db.add(
+            Document(
+                project_id=application.project_id,
+                agent_name="research",
+                doc_type="research_report",
+                title=f"Research report for {application.title}",
+                content=json.dumps(report_data, ensure_ascii=False),
+                version=1,
+            )
+        )
+
+    async def _log_agent_runs(self, application: Application, agent_runs: list[dict]) -> None:
+        for run in agent_runs:
+            status = AgentLogStatus.SUCCESS if run.get("success") else AgentLogStatus.ERROR
+            self.db.add(
+                AgentLog(
+                    project_id=application.project_id,
+                    correlation_id=uuid.uuid4(),
+                    agent_name=f"deep_research/{run.get('agent_name', 'unknown')}",
+                    stage="deep_research",
+                    action="deep_research_step",
+                    input_payload={"input_text": (run.get("input_text") or "")[:500]},
+                    output_payload={
+                        "output_text": (run.get("output_text") or "")[:1000],
+                        "duration_sec": run.get("duration_sec"),
+                        "success": run.get("success"),
+                    },
+                    status=status,
+                )
+            )
+
+    async def _post_to_tracker(self, application: Application, report_data: dict) -> None:
+        task_result = await self.db.execute(
+            select(Task)
+            .where(Task.project_id == application.project_id, Task.tracker_issue_id.is_not(None))
+            .order_by(Task.created_at.desc())
+            .limit(1)
+        )
+        tracker_task = task_result.scalar_one_or_none()
+        if not tracker_task or not tracker_task.tracker_issue_id:
+            return
+        summary = (report_data.get("executive_summary") or "")[:500]
+        text = (
+            "Deep Research завершён, ожидает review РП.\n\n"
+            f"Decision: {report_data.get('decision', 'n/a')}\n"
+            f"Feasibility: {report_data.get('feasibility_score', 'n/a')}\n"
+            f"Quality: {report_data.get('quality_score', 'n/a')}\n"
+            f"Completeness: {report_data.get('completeness_score', 'n/a')}\n"
+            f"Agents completed: {report_data.get('agents_completed', 0)}/{report_data.get('agents_total', 9)}\n\n"
+            f"Executive Summary:\n{summary}"
+        )
+        await self.tracker_client.add_comment(tracker_task.tracker_issue_id, text)
 
     async def _save_to_tracker(self, tracker_issue_id: str, report: dict):
         hypotheses_count = len(report.get("hypotheses", []))

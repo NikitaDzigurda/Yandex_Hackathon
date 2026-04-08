@@ -16,6 +16,9 @@
     .error { color: #b00020; font-weight: 600; }
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
     th, td { border: 1px solid #ccc; padding: 6px; text-align: left; }
+    .badge { padding: 3px 8px; border-radius: 10px; color: #fff; font-weight: 700; display: inline-block; }
+    .progress { background: #eee; border-radius: 6px; overflow: hidden; margin-top: 4px; margin-bottom: 10px; }
+    .progress-bar { height: 14px; background: #4caf50; }
   </style>
 </head>
 <body>
@@ -197,15 +200,43 @@
       if (!id) return setResult("report_result", "Введите ID заявки", true);
       try {
         const data = await request(`/api/v1/applications/${id}/report`);
-        const hypotheses = (data.hypotheses || [])
-          .map(h => `#${h.priority} [${h.risk}] ${h.statement}`)
-          .join("\n");
-        setResult("report_result", {
-          domain_overview: data.domain_overview,
-          hypotheses,
-          recommendations: data.recommendations,
-          confidence_score: data.confidence_score
-        });
+        if (data.source === "deep_research") {
+          const decision = data.decision || "UNKNOWN";
+          const decisionColor = decision === "GO"
+            ? "#2e7d32"
+            : (decision === "GO WITH CONDITIONS" ? "#f9a825" : "#c62828");
+          const f = Number(data.feasibility_score || 0);
+          const q = Number(data.quality_score || 0);
+          const c = Number(data.completeness_score || 0);
+          const finalReportId = "deep_report_full";
+
+          document.getElementById("report_result").className = "result";
+          document.getElementById("report_result").innerHTML = `
+            <div><strong>Источник:</strong> Deep Research</div>
+            <div style="margin-top: 8px;"><strong>Decision:</strong> <span class="badge" style="background:${decisionColor};">${decision}</span></div>
+            <div style="margin-top: 10px;"><strong>Feasibility:</strong> ${f}/100</div>
+            <div class="progress"><div class="progress-bar" style="width:${Math.max(0, Math.min(100, f))}%;"></div></div>
+            <div><strong>Quality:</strong> ${q}/100</div>
+            <div class="progress"><div class="progress-bar" style="width:${Math.max(0, Math.min(100, q))}%; background:#1e88e5;"></div></div>
+            <div><strong>Completeness:</strong> ${c}/100</div>
+            <div class="progress"><div class="progress-bar" style="width:${Math.max(0, Math.min(100, c))}%; background:#8e24aa;"></div></div>
+            <div><strong>Agents completed:</strong> ${data.agents_completed || 0}/${data.agents_total || 9}</div>
+            <div style="margin-top: 10px;"><strong>Executive Summary:</strong></div>
+            <div style="white-space: pre-wrap; background:#fafafa; border:1px solid #ddd; padding:8px; border-radius:6px;">${data.executive_summary || ""}</div>
+            <button style="margin-top: 10px;" onclick="const el=document.getElementById('${finalReportId}'); el.style.display = el.style.display === 'none' ? 'block' : 'none';">Показать полный отчёт</button>
+            <div id="${finalReportId}" style="display:none; margin-top:8px; white-space: pre-wrap; font-family: monospace; background:#f5f5f5; border:1px solid #ddd; padding:8px; border-radius:6px;">${data.final_report || ""}</div>
+          `;
+        } else {
+          const hypotheses = (data.hypotheses || [])
+            .map(h => `#${h.priority} [${h.risk}] ${h.statement}`)
+            .join("\n");
+          setResult("report_result", {
+            domain_overview: data.domain_overview,
+            hypotheses,
+            recommendations: data.recommendations,
+            confidence_score: data.confidence_score
+          });
+        }
       } catch (e) {
         setResult("report_result", e.message, true);
       }

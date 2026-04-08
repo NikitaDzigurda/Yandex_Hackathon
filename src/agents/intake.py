@@ -1,5 +1,8 @@
 """Intake Agent implementation."""
 
+from __future__ import annotations
+
+import asyncio
 import json
 import logging
 import uuid
@@ -10,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
 from db.models import AgentLog, AgentLogStatus, Application, ApplicationStatus, Task
-from integrations.tracker import TrackerClient
+from integrations.tracker import TrackerAPIError, TrackerClient
 from integrations.yandex_cloud import YandexCloudAgentClient
+from integrations.yandex_responses import YandexResponsesClient
 from schemas.application import IntakeResult, ScorecardItem
 
 logger = logging.getLogger(__name__)
@@ -63,8 +67,26 @@ class IntakeAgent:
         self.yc_client = yc_client
         self.tracker_client = tracker_client
         self.db_session = db_session
+        self.yandex_responses_client = YandexResponsesClient()
+
+    def _check_deep_intake_available(self) -> bool:
+        required = [
+            settings.yandex_api_key,
+            settings.yandex_project_id,
+            settings.eval_technical_analyst_id,
+            settings.eval_market_researcher_id,
+            settings.eval_innovator_id,
+            settings.eval_risk_assessor_id,
+            settings.eval_moderator_id,
+        ]
+        return all(value and str(value).strip() for value in required)
 
     async def process(self, application_id: UUID) -> IntakeResult:
+        if self._check_deep_intake_available():
+            return await self._run_deep_intake(application_id)
+        return await self._run_simple_intake(application_id)
+
+    async def _run_simple_intake(self, application_id: UUID) -> IntakeResult:
         result = await self.db_session.execute(select(Application).where(Application.id == application_id))
         application = result.scalar_one_or_none()
         if application is None:
@@ -108,21 +130,143 @@ class IntakeAgent:
             )
         )
 
-        issue = await self.tracker_client.create_issue(
-            queue=settings.tracker_queue_key,
-            summary=f"[Intake] {application.title}",
-            description=self._build_tracker_description(application, intake_result),
-            tags=["intake", "mvp"],
+        try:
+            issue = await self.tracker_client.create_issue(
+                queue=settings.tracker_queue_key,
+                summary=f"[Intake] {application.title}",
+                description=self._build_tracker_description(application, intake_result),
+                tags=["intake", "mvp"],
+            )
+            self.db_session.add(
+                Task(
+                    project_id=application.project_id,
+                    tracker_issue_id=issue.get("key") or issue.get("id"),
+                    title=f"Intake review: {application.title}",
+                    description=intake_result.summary,
+                    status="created",
+                )
+            )
+        except TrackerAPIError as exc:
+            logger.warning("tracker_unavailable_intake_simple", extra={"error": str(exc)})
+            self.db_session.add(
+                AgentLog(
+                    project_id=application.project_id,
+                    correlation_id=uuid.uuid4(),
+                    agent_name="intake",
+                    stage="intake",
+                    action="tracker_create_issue_failed",
+                    input_payload={"application_id": str(application.id)},
+                    output_payload={"error": str(exc)},
+                    status=AgentLogStatus.ERROR,
+                )
+            )
+
+        await self.db_session.commit()
+        await self.db_session.refresh(application)
+        return intake_result
+
+    async def _run_deep_intake(self, application_id: UUID) -> IntakeResult:
+        result = await self.db_session.execute(select(Application).where(Application.id == application_id))
+        application = result.scalar_one_or_none()
+        if application is None:
+            raise ValueError(f"Application not found: {application_id}")
+
+        proposal_text = await self._build_user_message(application)
+        common_prompt = self._build_deep_common_prompt(proposal_text)
+
+        tasks = [
+            self._call_expert("technical_analyst", settings.eval_technical_analyst_id, common_prompt),
+            self._call_expert("market_researcher", settings.eval_market_researcher_id, common_prompt),
+            self._call_expert("innovator", settings.eval_innovator_id, common_prompt),
+            self._call_expert("risk_assessor", settings.eval_risk_assessor_id, common_prompt),
+        ]
+        tech_out, market_out, innov_out, risk_out = await asyncio.gather(*tasks)
+
+        expert_outputs = {
+            "technical_analyst": tech_out,
+            "market_researcher": market_out,
+            "innovator": innov_out,
+            "risk_assessor": risk_out,
+        }
+        await self._log_committee_steps(application, expert_outputs)
+
+        moderator_prompt = self._build_moderator_prompt(proposal_text, expert_outputs)
+        moderator_out, _ = await self._call_expert("moderator", settings.eval_moderator_id, moderator_prompt)
+
+        verdict = self._extract_verdict(moderator_out)
+        confidence = self._extract_confidence(moderator_out)
+        recommended_action = "approve" if verdict == "APPROVE" else "reject"
+
+        synthetic_score = int(round((confidence or 60.0) / 10))
+        synthetic_score = max(1, min(10, synthetic_score))
+        scorecard_items = [
+            ScorecardItem(criterion="Committee confidence", score=synthetic_score, rationale="Deep Intake moderator confidence"),
+            ScorecardItem(criterion="Technical feasibility", score=synthetic_score, rationale="Technical analyst conclusion"),
+            ScorecardItem(criterion="Market relevance", score=synthetic_score, rationale="Market researcher conclusion"),
+            ScorecardItem(criterion="Innovation", score=synthetic_score, rationale="Innovator conclusion"),
+            ScorecardItem(criterion="Risk profile", score=synthetic_score, rationale="Risk assessor conclusion"),
+        ]
+
+        intake_result = IntakeResult(
+            application_id=application.id,
+            scorecard=scorecard_items,
+            clarifying_questions=[],
+            summary=moderator_out,
+            recommended_action=recommended_action,
         )
+
+        application.scorecard = {
+            "items": [item.model_dump() for item in intake_result.scorecard],
+            "overall_score": confidence,
+            "source": "deep_intake_committee",
+            "verdict": verdict,
+        }
+        application.summary = moderator_out
+        application.status = ApplicationStatus.SCORING
+
         self.db_session.add(
-            Task(
+            AgentLog(
                 project_id=application.project_id,
-                tracker_issue_id=issue.get("key") or issue.get("id"),
-                title=f"Intake review: {application.title}",
-                description=intake_result.summary,
-                status="created",
+                correlation_id=uuid.uuid4(),
+                agent_name="intake/moderator",
+                stage="intake",
+                action="committee_verdict",
+                input_payload={"application_id": str(application.id)},
+                output_payload={"verdict": verdict, "confidence": confidence},
+                status=AgentLogStatus.SUCCESS,
             )
         )
+
+        try:
+            issue = await self.tracker_client.create_issue(
+                queue=settings.tracker_queue_key,
+                summary=f"[Intake Committee] {application.title}",
+                description=self._build_tracker_description(application, intake_result),
+                tags=["intake", "committee", "mvp"],
+            )
+            self.db_session.add(
+                Task(
+                    project_id=application.project_id,
+                    tracker_issue_id=issue.get("key") or issue.get("id"),
+                    title=f"Intake review: {application.title}",
+                    description=intake_result.summary[:1000],
+                    status="created",
+                )
+            )
+        except TrackerAPIError as exc:
+            logger.warning("tracker_unavailable_intake_deep", extra={"error": str(exc)})
+            self.db_session.add(
+                AgentLog(
+                    project_id=application.project_id,
+                    correlation_id=uuid.uuid4(),
+                    agent_name="intake",
+                    stage="intake",
+                    action="tracker_create_issue_failed",
+                    input_payload={"application_id": str(application.id)},
+                    output_payload={"error": str(exc)},
+                    status=AgentLogStatus.ERROR,
+                )
+            )
 
         await self.db_session.commit()
         await self.db_session.refresh(application)
@@ -171,3 +315,66 @@ class IntakeAgent:
             f"Рекомендация: {result.recommended_action}\n"
             f"Application ID: {application.id}"
         )
+
+    def _build_deep_common_prompt(self, proposal_text: str) -> str:
+        return (
+            "Оцени проектную заявку строго по фактам, не выдумывай данные.\n"
+            "Если данных не хватает, явно укажи риски и вопросы.\n\n"
+            f"Заявка:\n{proposal_text}"
+        )
+
+    def _build_moderator_prompt(self, proposal_text: str, outputs: dict[str, tuple[str, dict]]) -> str:
+        return (
+            "Ты moderator комитета экспертов. Синтезируй оценки и вынеси итог: APPROVE или REJECT.\n"
+            "Также укажи confidence (0-100).\n\n"
+            f"Заявка:\n{proposal_text}\n\n"
+            f"technical_analyst:\n{outputs['technical_analyst'][0]}\n\n"
+            f"market_researcher:\n{outputs['market_researcher'][0]}\n\n"
+            f"innovator:\n{outputs['innovator'][0]}\n\n"
+            f"risk_assessor:\n{outputs['risk_assessor'][0]}"
+        )
+
+    async def _call_expert(self, expert_name: str, prompt_id: str, prompt: str) -> tuple[str, dict]:
+        timeout = 300 if expert_name in {"innovator", "moderator"} else 180
+        text, payload = await self.yandex_responses_client.async_call(
+            prompt_id=prompt_id,
+            input_text=prompt,
+            timeout_sec=timeout,
+            retries=3,
+        )
+        return text, payload
+
+    async def _log_committee_steps(self, application: Application, outputs: dict[str, tuple[str, dict]]) -> None:
+        for name, (text, payload) in outputs.items():
+            self.db_session.add(
+                AgentLog(
+                    project_id=application.project_id,
+                    correlation_id=uuid.uuid4(),
+                    agent_name=f"intake/{name}",
+                    stage="intake",
+                    action="committee_step",
+                    input_payload={"application_id": str(application.id)},
+                    output_payload={
+                        "output_text": text[:1000],
+                        "response_id": payload.get("id"),
+                        "status": payload.get("status"),
+                    },
+                    status=AgentLogStatus.SUCCESS,
+                )
+            )
+
+    def _extract_verdict(self, text: str) -> str:
+        upper = (text or "").upper()
+        if "APPROVE" in upper or "УТВЕРД" in upper:
+            return "APPROVE"
+        if "REJECT" in upper or "ОТКЛОН" in upper or "ОТКАЗ" in upper:
+            return "REJECT"
+        return "REJECT"
+
+    def _extract_confidence(self, text: str) -> float | None:
+        import re
+
+        match = re.search(r"(?i)(confidence|уверенность)\s*[:=]?\s*(\d{1,3})", text or "")
+        if not match:
+            return None
+        return max(0.0, min(100.0, float(match.group(2))))

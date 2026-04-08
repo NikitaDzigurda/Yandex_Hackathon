@@ -9,3 +9,5 @@ redis
 structlog
 psycopg[binary]
 email-validator
+requests
+python-dotenv
