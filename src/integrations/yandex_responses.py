@@ -25,7 +25,7 @@ class YandexResponsesClient:
         self,
         prompt_id: str,
         input_text: str,
-        timeout_sec: int = 180,
+        timeout_sec: int = 300,
         retries: int = 3,
     ) -> tuple[str, dict[str, Any]]:
         if not self.api_key:
@@ -114,3 +114,22 @@ class YandexResponsesClient:
                 seen.add(value)
                 unique.append(value)
         return "\n\n".join(unique).strip()
+
+    async def ping(self, prompt_id: str | None = None) -> bool:
+        """Verify connectivity to Yandex AI Studio Responses API."""
+        try:
+            if not self.api_key or not self.project_id:
+                return False
+            # If no prompt_id provided, we just check if key/project are set
+            if not prompt_id:
+                return True
+            
+            await self.async_call(
+                prompt_id=prompt_id,
+                input_text="ping",
+                timeout_sec=30,
+                retries=1
+            )
+            return True
+        except Exception:
+            return False

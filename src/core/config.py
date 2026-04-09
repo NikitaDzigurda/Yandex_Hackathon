@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     save_full_prompts: bool = True
     yandex_retry_backoff_sec: float = 5.0
 
+    # Auth
+    jwt_secret_key: str = "supersecret"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_hours: int = 24
+    
+    # Telegram Admin
+    telegram_bot_token: str = ""
+    public_app_url: str = "http://localhost:8000"
+
     @model_validator(mode="after")
     def _apply_compat_aliases(self) -> "Settings":
         # Keep backward compatibility between YC_* and YANDEX_* env styles.

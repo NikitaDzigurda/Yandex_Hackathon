@@ -11,3 +11,7 @@ psycopg[binary]
 email-validator
 requests
 python-dotenv
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+bcrypt==3.2.0

@@ -20,6 +20,10 @@ RUN pip install --no-cache-dir \
     psycopg[binary] \
     email-validator \
     requests \
-    python-dotenv
+    python-dotenv \
+    "python-jose[cryptography]" \
+    "passlib[bcrypt]" \
+    bcrypt==3.2.0 \
+    python-multipart
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

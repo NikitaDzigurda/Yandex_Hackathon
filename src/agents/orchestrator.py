@@ -46,7 +46,7 @@ class Orchestrator:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.error("orchestrator_loop_error", extra={"error": str(exc)})
+                logger.error(f"orchestrator_loop_error: {exc}")
                 await asyncio.sleep(5)
 
     async def close(self):
@@ -56,45 +56,47 @@ class Orchestrator:
         item = await self.redis.blpop(self.QUEUE_INTAKE, timeout=5)
         if not item:
             return
-        _, application_id = item
+        _, project_id_str = item
         async with AsyncSessionLocal() as db:
             try:
-                app = await self._get_application(db, UUID(application_id))
-                if app is None:
+                project_id = UUID(project_id_str)
+                project = await self._get_project(db, project_id)
+                if project is None:
                     return
-                await self._update_project_status(db, app.project_id, "intake_in_progress")
+                await self._update_project_status(db, project_id, "under_review")
                 agent = IntakeAgent(
                     yc_client=YandexCloudAgentClient(),
                     tracker_client=TrackerClient(),
                     db_session=db,
                 )
-                await agent.process(UUID(application_id))
-                await self.redis.rpush(self.QUEUE_RESEARCH, application_id)
+                await agent.process(project_id)
+                await self.redis.rpush(self.QUEUE_RESEARCH, str(project_id))
             except Exception as exc:
-                await self._log_error(db, UUID(application_id), "intake", "queue_process", str(exc))
+                await self._log_error(db, project_id, "intake", "queue_process", str(exc))
                 await db.commit()
 
     async def _process_research_queue(self):
         item = await self.redis.blpop(self.QUEUE_RESEARCH, timeout=5)
         if not item:
             return
-        _, application_id = item
+        _, project_id_str = item
         async with AsyncSessionLocal() as db:
             try:
-                app = await self._get_application(db, UUID(application_id))
-                if app is None:
+                project_id = UUID(project_id_str)
+                project = await self._get_project(db, project_id)
+                if project is None:
                     return
                 agent = ResearchAgent(
                     yc_client=YandexCloudAgentClient(),
                     tracker_client=TrackerClient(),
                     db_session=db,
                 )
-                report = await agent.process(UUID(application_id))
-                await self._update_project_status(db, app.project_id, "awaiting_approval")
+                report = await agent.process(project_id)
+                await self._update_project_status(db, project_id, "deep_research_completed")
                 tracker = TrackerClient()
                 issue = await tracker.create_issue(
                     queue=settings.tracker_queue_key,
-                    summary=f"[Approval Required] {app.title}",
+                    summary=f"[Approval Required] {project.title}",
                     description=(
                         "Research завершён, требуется решение РП.\n\n"
                         f"Confidence score: {report.get('confidence_score', 'n/a')}"
@@ -103,16 +105,16 @@ class Orchestrator:
                 )
                 db.add(
                     Task(
-                        project_id=app.project_id,
+                        project_id=project.id,
                         tracker_issue_id=issue.get("key") or issue.get("id"),
-                        title=f"Требует решения РП: {app.title}",
+                        title=f"Требует решения РП: {project.title}",
                         description="Research completed, awaiting PM approval",
                         status="created",
                     )
                 )
                 await db.commit()
             except Exception as exc:
-                await self._log_error(db, UUID(application_id), "research", "queue_process", str(exc))
+                await self._log_error(db, project_id, "research", "queue_process", str(exc))
                 await db.commit()
 
     async def _run_monitor_if_needed(self):
@@ -140,22 +142,19 @@ class Orchestrator:
             project.status = status
             await db.commit()
 
-    async def _get_application(self, db: AsyncSession, application_id: UUID) -> Application | None:
-        result = await db.execute(select(Application).where(Application.id == application_id))
+    async def _get_project(self, db: AsyncSession, project_id: UUID) -> Project | None:
+        result = await db.execute(select(Project).where(Project.id == project_id))
         return result.scalar_one_or_none()
 
-    async def _log_error(self, db: AsyncSession, application_id: UUID, stage: str, action: str, message: str):
-        app = await self._get_application(db, application_id)
-        if app is None:
-            return
+    async def _log_error(self, db: AsyncSession, project_id: UUID, stage: str, action: str, message: str):
         db.add(
             AgentLog(
-                project_id=app.project_id,
+                project_id=project_id,
                 correlation_id=uuid.uuid4(),
                 agent_name="orchestrator",
                 stage=stage,
                 action=action,
-                input_payload={"application_id": str(application_id)},
+                input_payload={"project_id": str(project_id)},
                 output_payload={"error": message},
                 status=AgentLogStatus.ERROR,
             )

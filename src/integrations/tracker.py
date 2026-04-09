@@ -34,7 +34,10 @@ class TrackerClient:
                 return {}
             return response.json()
         except httpx.HTTPStatusError as exc:
-            logger.exception("Tracker API HTTP error: %s %s", method, path)
+            if exc.response.status_code in (401, 403):
+                logger.error("Tracker API Authentication Error: %s %s (Status: %s)", method, path, exc.response.status_code)
+            else:
+                logger.exception("Tracker API HTTP error: %s %s", method, path)
             raise TrackerAPIError(f"Tracker API returned {exc.response.status_code}: {exc.response.text}") from exc
         except httpx.HTTPError as exc:
             logger.exception("Tracker API transport error: %s %s", method, path)

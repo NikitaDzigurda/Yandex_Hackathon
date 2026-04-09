@@ -1,110 +1,225 @@
 """Projects API endpoints."""
 
-import asyncio
-import json
+from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from core.config import settings
+from core.security import get_current_user, require_reviewer, require_submitter
 from db.base import get_db
-from db.models import AgentLog, Application, Document, Project, Task
-from integrations.tracker import TrackerClient
-from schemas.project import ProjectDetailResponse, ProjectResponse, ProjectStatusResponse
+from db.models import Project, ProjectStatus, User, UserRole
+from api.telegram_admin import notify_new_project_submitted
+from schemas.project import (
+    ProjectCreate,
+    ProjectOut,
+    ProjectOutEnvelope,
+    ProjectUpdate,
+    ReviewEnvelope,
+    ReviewRequest,
+)
 
-router = APIRouter(prefix="/projects", tags=["projects"])
+router = APIRouter()
 
 
-@router.get("", response_model=list[ProjectResponse])
-async def list_projects(
-    limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+@router.post("", response_model=ProjectOutEnvelope)
+async def create_project(
+    req: ProjectCreate,
+    current_user: User = Depends(require_submitter),
     db: AsyncSession = Depends(get_db),
-) -> list[ProjectResponse]:
-    result = await db.execute(select(Project).limit(limit).offset(offset).order_by(Project.created_at.desc()))
-    projects = result.scalars().all()
-    return [ProjectResponse.model_validate(project) for project in projects]
+):
+    project = Project(
+        title=req.title,
+        domain=req.domain,
+        description=req.description,
+        attachments_url=req.attachments_url,
+        task=req.task,
+        stage=req.stage,
+        deadlines=req.deadlines,
+        status=ProjectStatus.draft.value,
+        human_decision="pending",
+        submitter_id=current_user.id,
+        created_by=current_user.email,
+    )
+    db.add(project)
+    await db.commit()
+    await db.refresh(project)
+    return {"ok": True, "result": project}
 
 
-@router.get("/{project_id}", response_model=ProjectDetailResponse)
-async def get_project(project_id: UUID, db: AsyncSession = Depends(get_db)) -> ProjectDetailResponse:
+@router.get("/mine", response_model=List[ProjectOut])
+async def get_my_projects(
+    current_user: User = Depends(require_submitter),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(
         select(Project)
-        .where(Project.id == project_id)
-        .options(selectinload(Project.applications))
+        .where(Project.submitter_id == current_user.id)
+        .order_by(Project.created_at.desc())
     )
-    project = result.scalar_one_or_none()
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    return ProjectDetailResponse.model_validate(project)
+    return result.scalars().all()
 
 
-@router.get("/{project_id}/status", response_model=ProjectStatusResponse)
-async def get_project_status(project_id: UUID, db: AsyncSession = Depends(get_db)) -> ProjectStatusResponse:
+@router.get("/review-queue", response_model=List[ProjectOut])
+async def get_review_queue(
+    current_user: User = Depends(require_reviewer),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Project)
+        .where(
+            Project.status.in_(
+                [
+                    ProjectStatus.submitted.value,
+                    ProjectStatus.under_review.value,
+                    ProjectStatus.revision_requested.value,
+                ]
+            )
+        )
+        .order_by(Project.created_at.asc())
+    )
+    return result.scalars().all()
+
+
+@router.get("/{project_id}", response_model=ProjectOutEnvelope)
+async def get_project(
+    project_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
-    if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
 
-    app_result = await db.execute(
-        select(Application).where(Application.project_id == project_id).order_by(Application.created_at.desc()).limit(1)
-    )
-    application = app_result.scalar_one_or_none()
+    if current_user.role == UserRole.submitter and project.submitter_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
 
-    doc_result = await db.execute(
-        select(Document)
-        .where(Document.project_id == project_id, Document.doc_type == "research_report")
-        .order_by(Document.created_at.desc())
-        .limit(1)
-    )
-    report_doc = doc_result.scalar_one_or_none()
-    research_report = json.loads(report_doc.content) if report_doc and report_doc.content else None
+    return {"ok": True, "result": project}
 
-    logs_result = await db.execute(
-        select(AgentLog).where(AgentLog.project_id == project_id).order_by(AgentLog.created_at.desc()).limit(5)
-    )
-    recent_logs = logs_result.scalars().all()
 
-    tracker_tasks: list[dict] = []
-    task_result = await db.execute(select(Task).where(Task.project_id == project_id, Task.tracker_issue_id.is_not(None)))
-    task_keys = [item.tracker_issue_id for item in task_result.scalars().all() if item.tracker_issue_id]
-    if task_keys:
-        tracker = TrackerClient()
-        try:
-            queue_issues = await asyncio.wait_for(
-                tracker.list_issues(settings.tracker_queue_key),
-                timeout=10.0,
-            )
-            tracker_tasks = [issue for issue in queue_issues if issue.get("key") in task_keys]
-        except Exception:
-            tracker_tasks = []
+@router.patch("/{project_id}", response_model=ProjectOutEnvelope)
+async def update_project(
+    project_id: UUID,
+    req: ProjectUpdate,
+    current_user: User = Depends(require_submitter),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
 
-    return ProjectStatusResponse(
-        project_id=project.id,
-        title=project.title,
-        status=project.status,
-        application={
-            "id": str(application.id),
-            "status": application.status.value,
-            "scorecard": application.scorecard,
-            "summary": application.summary,
-        }
-        if application
-        else None,
-        research_report=research_report,
-        tracker_tasks=tracker_tasks,
-        recent_agent_logs=[
-            {
-                "agent_name": log.agent_name,
-                "stage": log.stage,
-                "action": log.action,
-                "status": log.status.value,
-                "created_at": log.created_at.isoformat(),
-            }
-            for log in recent_logs
-        ],
-        created_at=project.created_at,
-    )
+    if project.submitter_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not your project")
+
+    if project.status not in (ProjectStatus.draft.value, ProjectStatus.revision_requested.value):
+        raise HTTPException(status_code=400, detail="Cannot edit in current status")
+
+    update_data = req.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(project, key, value)
+    
+    if project.status == ProjectStatus.revision_requested.value:
+        project.status = ProjectStatus.draft.value
+
+    await db.commit()
+    await db.refresh(project)
+    return {"ok": True, "result": project}
+
+
+@router.post("/{project_id}/submit", response_model=ProjectOutEnvelope)
+async def submit_project(
+    project_id: UUID,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_submitter),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if project.submitter_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not your project")
+
+    if project.status not in (ProjectStatus.draft.value, ProjectStatus.revision_requested.value):
+        raise HTTPException(status_code=400, detail="Cannot submit from this status")
+
+    project.status = ProjectStatus.submitted.value
+    project.human_decision = "pending"
+    await db.commit()
+    await db.refresh(project)
+
+    background_tasks.add_task(notify_new_project_submitted, project.id, db)
+
+    return {"ok": True, "result": project}
+
+
+@router.post("/{project_id}/review", response_model=ReviewEnvelope)
+async def review_project(
+    project_id: UUID,
+    req: ReviewRequest,
+    current_user: User = Depends(require_reviewer),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    valid_statuses = [
+        ProjectStatus.submitted.value,
+        ProjectStatus.under_review.value,
+        ProjectStatus.revision_requested.value,
+        ProjectStatus.accepted_for_research.value,
+        ProjectStatus.deep_research_running.value,
+        ProjectStatus.deep_research_completed.value,
+    ]
+    if project.status not in valid_statuses:
+        raise HTTPException(status_code=400, detail="Project not in reviewable state")
+
+    if req.decision == "approve":
+        project.status = ProjectStatus.accepted_for_research.value
+    elif req.decision == "reject":
+        project.status = ProjectStatus.rejected.value
+    elif req.decision == "request_revision":
+        project.status = ProjectStatus.revision_requested.value
+    else:
+        project.status = ProjectStatus.under_review.value
+        
+    project.human_decision = req.decision
+    project.reviewer_id = current_user.id
+    project.reviewer_comment = req.comment
+    
+    await db.commit()
+    await db.refresh(project)
+
+    return {"ok": True, "result": project}
+
+
+@router.post("/{project_id}/publish-showcase", response_model=ProjectOutEnvelope)
+async def publish_showcase(
+    project_id: UUID,
+    current_user: User = Depends(require_reviewer),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if project.status != ProjectStatus.deep_research_completed.value:
+        raise HTTPException(status_code=400, detail="Complete deep research before publishing")
+
+    project.status = ProjectStatus.on_showcase.value
+    await db.commit()
+    await db.refresh(project)
+
+    return {"ok": True, "result": project}

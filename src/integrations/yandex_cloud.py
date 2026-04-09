@@ -55,3 +55,17 @@ class YandexCloudAgentClient:
         except (httpx.HTTPError, KeyError, IndexError, TypeError) as exc:
             logger.exception("Yandex Cloud agent invocation failed")
             raise YCAgentError(f"Yandex Cloud request failed: {exc}") from exc
+
+    async def ping(self) -> bool:
+        """Verify connectivity to Yandex Cloud LLM API."""
+        try:
+            model_uri = self.build_model_uri("yandexgpt-lite")
+            await self.invoke_agent(
+                model_uri=model_uri,
+                system_prompt="ping",
+                user_message="ping",
+                max_tokens=10,
+            )
+            return True
+        except Exception:
+            return False

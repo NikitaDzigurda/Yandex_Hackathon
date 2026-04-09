@@ -19,10 +19,44 @@
     .badge { padding: 3px 8px; border-radius: 10px; color: #fff; font-weight: 700; display: inline-block; }
     .progress { background: #eee; border-radius: 6px; overflow: hidden; margin-top: 4px; margin-bottom: 10px; }
     .progress-bar { height: 14px; background: #4caf50; }
+    details { margin-bottom: 8px; border: 1px solid #ddd; border-radius: 4px; padding: 4px; }
+    summary { font-weight: bold; cursor: pointer; padding: 6px; background: #f0f0f0; border-radius: 4px; }
+    .agent-output { padding: 8px; background: #fafafa; font-family: monospace; white-space: pre-wrap; font-size: 0.9em; margin-top: 4px; }
   </style>
 </head>
 <body>
-  <h1>Демо: Intake + Research</h1>
+  <h1>Демо: Intake + Research (Phase 9)</h1>
+
+  <section>
+    <h2>Секция 0 — Авторизация (JWT)</h2>
+    <div class="row">
+      <div>
+        <h4 style="margin: 0 0 8px;">Войти</h4>
+        <label>Email</label>
+        <input id="login_email" value="admin@example.com" />
+        <label>Пароль</label>
+        <input id="login_password" type="password" value="secret123" />
+        <button onclick="loginUser()">Войти</button>
+      </div>
+      <div>
+        <h4 style="margin: 0 0 8px;">Зарегистрироваться</h4>
+        <label>Имя</label>
+        <input id="reg_name" placeholder="Иван Петров" />
+        <label>Email</label>
+        <input id="reg_email" placeholder="user@example.com" />
+        <label>Пароль (≥8 символов)</label>
+        <input id="reg_password" type="password" placeholder="password123" />
+        <label>Роль</label>
+        <select id="reg_role">
+          <option value="submitter">submitter (соискатель)</option>
+          <option value="reviewer">reviewer (ревьюер)</option>
+          <option value="admin">admin</option>
+        </select>
+        <button onclick="registerUser()">Зарегистрироваться</button>
+      </div>
+    </div>
+    <div id="login_result" class="result"></div>
+  </section>
 
   <section>
     <h2>Секция 1 — Подать заявку</h2>
@@ -42,7 +76,8 @@
     </select>
     <label>Текст заявки</label>
     <textarea id="text">Предлагаем разработать систему ранней диагностики...</textarea>
-    <button onclick="submitApplication()">Подать заявку</button>
+    <button onclick="submitApplication()">1. Создать черновик</button>
+    <button onclick="submitForReview()" style="margin-top: 8px; background: #e3f2fd; color: #1976d2; border: 1px solid #1976d2;">2. Отправить на ревью (Submit)</button>
     <div id="submit_result" class="result"></div>
   </section>
 
@@ -53,6 +88,7 @@
     <button onclick="checkStatus()">Проверить статус</button>
     <div id="status_result" class="result"></div>
     <div id="scorecard_table"></div>
+    <div id="intake_details" style="margin-top: 16px;"></div>
   </section>
 
   <section>
@@ -75,11 +111,18 @@
     <div class="row">
       <label><input type="radio" name="decision" value="approve" checked /> Одобрить</label>
       <label><input type="radio" name="decision" value="reject" /> Отклонить</label>
+      <label><input type="radio" name="decision" value="request_revision" /> На доработку</label>
     </div>
     <label>Комментарий РП</label>
     <textarea id="pm_comment">Решение согласовано после review.</textarea>
     <button onclick="submitDecision()">Принять решение</button>
     <div id="decision_result" class="result"></div>
+  </section>
+
+  <section>
+    <h2>Секция 5.1 — Админка (Проверка моделей)</h2>
+    <button onclick="pingModels()" style="background: #efebe9; color: #4e342e; border: 1px solid #4e342e;">Проверить доступность моделей</button>
+    <div id="ping_result" class="result"></div>
   </section>
 
   <section>
@@ -114,6 +157,11 @@
     }
 
     async function request(url, options = {}) {
+      options.headers = options.headers || {};
+      const token = localStorage.getItem("token");
+      if (token) {
+        options.headers["Authorization"] = "Bearer " + token;
+      }
       const resp = await fetch(url, options);
       const text = await resp.text();
       let data = {};
@@ -122,23 +170,101 @@
       return data;
     }
 
+    async function loginUser() {
+      try {
+        const payload = {
+          email: document.getElementById("login_email").value,
+          password: document.getElementById("login_password").value
+        };
+        const data = await request("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        localStorage.setItem("token", data.access_token);
+        setResult("login_result", "Успешный вход! Токен сохранен.");
+      } catch (e) {
+        setResult("login_result", e.message, true);
+      }
+    }
+
+    async function registerUser() {
+      try {
+        const payload = {
+          full_name: document.getElementById("reg_name").value,
+          email: document.getElementById("reg_email").value,
+          password: document.getElementById("reg_password").value,
+          role: document.getElementById("reg_role").value
+        };
+        const data = await request("/api/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        localStorage.setItem("token", data.access_token);
+        setResult("login_result", "Регистрация успешна! Токен сохранен.");
+      } catch (e) {
+        setResult("login_result", e.message, true);
+      }
+    }
+
+    async function pingModels() {
+      try {
+        const data = await request("/api/admin/ping-models");
+        setResult("ping_result", data);
+      } catch (e) {
+        setResult("ping_result", e.message, true);
+      }
+    }
+
+    async function pollRunStatus(projectId, runId, targetResultId) {
+      const interval = setInterval(async () => {
+        try {
+          const runRes = await request(`/api/projects/${projectId}/runs/${runId}`);
+          const run = runRes.result;
+          const statusMsg = `Статус: ${run.status} | Прогресс: ${run.completed_agents}% ${run.current_agent ? '[' + run.current_agent + ']' : ''}\n${run.error_text || ''}`;
+          setResult(targetResultId, statusMsg);
+          
+          if (run.status === 'completed' || run.status === 'failed') {
+            clearInterval(interval);
+            const finalDetails = run.status === 'completed' ? `\n\nРезультат: ${JSON.stringify(runRes.payload || run, null, 2)}` : `\n\nОшибка: ${run.error_text}`;
+            setResult(targetResultId, `Завершено со статусом: ${run.status}${finalDetails}`);
+          }
+        } catch (e) {
+          clearInterval(interval);
+          setResult(targetResultId, `Ошибка опроса: ${e.message}`, true);
+        }
+      }, 3000);
+    }
+
     async function submitApplication() {
       try {
         const payload = {
           initiator_name: document.getElementById("initiator_name").value,
           initiator_email: document.getElementById("initiator_email").value,
           title: document.getElementById("title").value,
-          text: document.getElementById("text").value,
-          domain: document.getElementById("domain").value,
-          attachments_url: []
+          description: document.getElementById("text").value,
         };
-        const data = await request("/api/v1/applications", {
+        const data = await request("/api/projects", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
         });
-        document.getElementById("application_id").value = data.id;
-        setResult("submit_result", `Заявка создана. ID: ${data.id}`);
+        document.getElementById("application_id").value = data.result.id;
+        setResult("submit_result", `Заявка создана. ID: ${data.result.id}`);
+      } catch (e) {
+        setResult("submit_result", e.message, true);
+      }
+    }
+
+    async function submitForReview() {
+      const id = document.getElementById("application_id").value.trim();
+      if (!id) return setResult("submit_result", "Сначала создайте заявку или введите ID", true);
+      try {
+        const data = await request(`/api/projects/${id}/submit`, {
+          method: "POST"
+        });
+        setResult("submit_result", `Проект отправлен на ревью! Статус: ${data.result.status}`);
       } catch (e) {
         setResult("submit_result", e.message, true);
       }
@@ -148,12 +274,14 @@
       const id = document.getElementById("application_id").value.trim();
       if (!id) return setResult("status_result", "Введите ID заявки", true);
       try {
-        const data = await request(`/api/v1/applications/${id}`);
-        setResult("status_result", data);
+        const data = await request(`/api/projects/${id}`);
+        setResult("status_result", data.result);
         renderScorecard(data.scorecard);
+        renderIntakeDetails(data.intake_details);
       } catch (e) {
         setResult("status_result", e.message, true);
         document.getElementById("scorecard_table").innerHTML = "";
+        document.getElementById("intake_details").innerHTML = "";
       }
     }
 
@@ -173,12 +301,35 @@
       `;
     }
 
+    function renderIntakeDetails(details) {
+      const container = document.getElementById("intake_details");
+      if (!details || Object.keys(details).length === 0) {
+        container.innerHTML = "";
+        return;
+      }
+      let html = `<h3>Ход мыслей экспертов комитета (Intake)</h3>`;
+      for (const [expert, text] of Object.entries(details)) {
+        html += `
+          <details>
+            <summary>Эксперт: ${expert}</summary>
+            <div class="agent-output">${text}</div>
+          </details>
+        `;
+      }
+      container.innerHTML = html;
+    }
+
     async function triggerIntake() {
       const id = document.getElementById("application_id").value.trim();
       if (!id) return setResult("agents_result", "Введите ID заявки", true);
       try {
-        const data = await request(`/api/v1/applications/${id}/trigger-intake`, { method: "POST" });
-        setResult("agents_result", data);
+        const data = await request(`/api/projects/${id}/runs/evaluation`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        setResult("agents_result", "Запуск Intake...");
+        pollRunStatus(id, data.id, "agents_result");
       } catch (e) {
         setResult("agents_result", e.message, true);
       }
@@ -188,8 +339,13 @@
       const id = document.getElementById("application_id").value.trim();
       if (!id) return setResult("agents_result", "Введите ID заявки", true);
       try {
-        const data = await request(`/api/v1/applications/${id}/trigger-research`, { method: "POST" });
-        setResult("agents_result", data);
+        const data = await request(`/api/projects/${id}/runs/deep-research`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        setResult("agents_result", "Запуск Research...");
+        pollRunStatus(id, data.id, "agents_result");
       } catch (e) {
         setResult("agents_result", e.message, true);
       }
@@ -199,8 +355,9 @@
       const id = document.getElementById("application_id").value.trim();
       if (!id) return setResult("report_result", "Введите ID заявки", true);
       try {
-        const data = await request(`/api/v1/applications/${id}/report`);
-        if (data.source === "deep_research") {
+        const response = await request(`/api/projects/${id}/deep-research/latest`);
+        const data = response.payload || {};
+        if (data.source === "deep_research" || true) { // We can assume it uses new schema
           const decision = data.decision || "UNKNOWN";
           const decisionColor = decision === "GO"
             ? "#2e7d32"
@@ -223,7 +380,16 @@
             <div><strong>Agents completed:</strong> ${data.agents_completed || 0}/${data.agents_total || 9}</div>
             <div style="margin-top: 10px;"><strong>Executive Summary:</strong></div>
             <div style="white-space: pre-wrap; background:#fafafa; border:1px solid #ddd; padding:8px; border-radius:6px;">${data.executive_summary || ""}</div>
-            <button style="margin-top: 10px;" onclick="const el=document.getElementById('${finalReportId}'); el.style.display = el.style.display === 'none' ? 'block' : 'none';">Показать полный отчёт</button>
+            
+            <h3 style="margin-top: 20px;">Ход мыслей агентов (Deep Research)</h3>
+            ${Object.entries(data.agent_outputs || {}).map(([agent, text]) => `
+              <details>
+                <summary>Агент: ${agent}</summary>
+                <div class="agent-output">${text}</div>
+              </details>
+            `).join('')}
+
+            <button style="margin-top: 10px;" onclick="const el=document.getElementById('${finalReportId}'); el.style.display = el.style.display === 'none' ? 'block' : 'none';">Показать полный отчёт (Markdown)</button>
             <div id="${finalReportId}" style="display:none; margin-top:8px; white-space: pre-wrap; font-family: monospace; background:#f5f5f5; border:1px solid #ddd; padding:8px; border-radius:6px;">${data.final_report || ""}</div>
           `;
         } else {
@@ -249,12 +415,12 @@
       if (!comment.trim()) return setResult("decision_result", "Комментарий РП обязателен", true);
       const decisionEl = document.querySelector('input[name="decision"]:checked');
       try {
-        const data = await request(`/api/v1/applications/${id}/decision`, {
+        const data = await request(`/api/projects/${id}/review`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ decision: decisionEl.value, comment })
         });
-        setResult("decision_result", data);
+        setResult("decision_result", data.result);
       } catch (e) {
         setResult("decision_result", e.message, true);
       }
@@ -273,13 +439,8 @@
       const id = document.getElementById("project_id").value.trim();
       if (!id) return setResult("project_status_result", "Введите ID проекта", true);
       try {
-        const data = await request(`/api/v1/projects/${id}/status`);
-        setResult("project_status_result", {
-          project_id: data.project_id,
-          title: data.title,
-          status: data.status,
-          created_at: data.created_at
-        });
+        const data = await request(`/api/projects/${id}`);
+        setResult("project_status_result", data.result);
 
         const tasksContainer = document.getElementById("statusTrackerTasks");
         tasksContainer.innerHTML = "";

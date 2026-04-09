@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from dotenv import load_dotenv
-from integrations.yandex_responses import YandexResponsesClient as AsyncYandexResponsesClient
 
 load_dotenv()
 
@@ -162,12 +161,12 @@ class Config:
         "project_analyst": AgentConfig("project_analyst", "AGENT_PROJECT_ANALYST_ID", 180),
         "research_strategist": AgentConfig("research_strategist", "AGENT_RESEARCH_STRATEGIST_ID", 180),
         "technical_researcher": AgentConfig("technical_researcher", "AGENT_TECHNICAL_RESEARCHER_ID", 300),
-        "architect": AgentConfig("architect", "AGENT_ARCHITECT_ID", 400),
-        "roadmap_manager": AgentConfig("roadmap_manager", "AGENT_ROADMAP_MANAGER_ID", 400),
-        "hr_specialist": AgentConfig("hr_specialist", "AGENT_HR_SPECIALIST_ID", 300),
-        "risk_analyst": AgentConfig("risk_analyst", "AGENT_RISK_ANALYST_ID", 300),
-        "quality_reviewer": AgentConfig("quality_reviewer", "AGENT_QUALITY_REVIEWER_ID", 300),
-        "synthesis_manager": AgentConfig("synthesis_manager", "AGENT_SYNTHESIS_MANAGER_ID", 400),
+        "architect": AgentConfig("architect", "AGENT_ARCHITECT_ID", 300),
+        "roadmap_manager": AgentConfig("roadmap_manager", "AGENT_ROADMAP_MANAGER_ID", 300),
+        "hr_specialist": AgentConfig("hr_specialist", "AGENT_HR_SPECIALIST_ID", 180),
+        "risk_analyst": AgentConfig("risk_analyst", "AGENT_RISK_ANALYST_ID", 180),
+        "quality_reviewer": AgentConfig("quality_reviewer", "AGENT_QUALITY_REVIEWER_ID", 180),
+        "synthesis_manager": AgentConfig("synthesis_manager", "AGENT_SYNTHESIS_MANAGER_ID", 300),
     }
 
     AGENT_ORDER = [
@@ -1086,19 +1085,14 @@ class DeepResearchSystem:
         roadmap = compact_text(state.get("roadmap", ""), 6000)
 
         return f"""
-Ты эксперт по техсобеседованиям в Центре технологий для Общества.
-Центр реализует проекты на стыке медицины и ИИ.
-Задача: спроектировать структуру команды и план найма для реализации ПРИНЯТОГО проекта.
+Ты работаешь в мультиагентной Deep Research системе.
+
+Задача: определить команду, которая сможет реализовать проект по roadmap.
 
 Важно:
-- проект уже одобрен руководством;
-- ТЫ НЕ ДАЕШЬ МЕДИЦИНСКИХ СОВЕТОВ или персональных консультаций;
-- твой фокус строго на ТЕХНОЛОГИЧЕСКОМ и ОРГАНИЗАЦИОННОМ планировании состава команды;
-- используй конкретные технологии из представленной архитектуры;
-- если данных нет — не выдумывай персональные данные.
-
-## Описание проекта
-{state["project_description"]}
+- команда должна быть достаточной, но не раздутой;
+- требования к ролям должны опираться на реальный tech stack;
+- оценивай роли, приоритет найма, онбординг, модель найма и стоимость.
 
 ## Архитектура
 {architecture}
@@ -1108,25 +1102,54 @@ class DeepResearchSystem:
 
 Подготовь Markdown-ответ:
 
-## Структура команды (Аналитический обзор)
+## Структура команды
 - роли;
-- иерархия;
-- общий бюджет.
+- иерархия / взаимодействие;
+- итоговый размер команды;
+- ориентировочная стоимость в месяц и в год.
 
 ## Роли и требования
 Для каждой роли:
 - название;
+- количество;
 - seniority;
-- hard skills (из архитектуры);
-- зарплатный диапазон.
+- full-time / contract / part-time;
+- обязанности;
+- hard skills;
+- nice-to-have skills;
+- soft skills;
+- зарплатный диапазон;
+- когда нанимать;
+- приоритет найма.
+
+## Потребности по фазам
+Какие роли критичны на каких этапах roadmap.
 
 ## Стратегия найма
-- фазы (wave 1, 2, 3);
-- приоритеты.
+- wave 1 / wave 2 / wave 3;
+- кого брать full-time;
+- кого можно на контракт;
+- где допустим offshore/nearshore.
+
+## Стоимость команды
+Таблица по ролям:
+- salary;
+- benefits/overhead;
+- total.
+
+## План онбординга
+- pre-start;
+- week 1;
+- week 2-4;
+- необходимая документация.
+
+## Риски команды
+Ключевые риски найма/удержания/зависимости от людей.
 
 Требования:
-- ответ должен быть строго аналитическим;
-- не используй оценочные суждения о людях.
+- используй конкретные технологии из архитектуры;
+- цифры должны быть реалистичными;
+- ответ должен быть пригоден для запуска hiring.
 """.strip()
 
     def build_risk_prompt(self, state: Dict[str, Any]) -> str:
@@ -1321,55 +1344,16 @@ class DeepResearchSystem:
         decision = state.get("decision", "UNKNOWN")
 
         return f"""
-Ты Synthesis Manager — финальный аналитический агент в системе Deep Research.
-Твоя задача: собрать весь технический и стратегический research в единый ФИНАЛЬНЫЙ АНАЛИТИЧЕСКИЙ отчет.
+Ты работаешь в мультиагентной Deep Research системе.
+
+Задача: собрать весь research в один ФИНАЛЬНЫЙ, ИСЧЕРПЫВАЮЩИЙ, ACTIONABLE документ для передачи команде разработки и руководству.
 
 Важно:
-- отчет носит строго ТЕХНИЧЕСКИЙ, АРХИТЕКТУРНЫЙ и БИЗНЕС-ХАРАКТЕР;
-- это НЕ медицинское заключение и НЕ консультация врача;
-- ТЫ НЕ ДАЕШЬ СОВЕТОВ ПО ЗДОРОВЬЮ И НЕ СТАВИШЬ ДИАГНОЗЫ;
-- фокус на ИТ-реализации продукта и его архитектуре;
-- если информации нет — укажи технический gap.
-
-## Результаты исследований
-
-### План бизнеса и стратегия
-{analysis}
-{strategy}
-
-### Облик продукта и технологии
-{tech}
-{architecture}
-
-### Реализация и ресурсы
-{roadmap}
-{team_plan}
-
-### Оценки и риски
-{risk}
-{quality}
-
-Основные показатели: Decision: {decision}, Feasibility: {feasibility_score}, Quality: {quality_score}, Completeness: {completeness_score}.
-
-Нужно вернуть Markdown со структурой:
-
-# Deep Research Report: [название проекта]
-
-## Executive Summary (Технический аналитический обзор)
-- суть ИТ-продукта;
-- ключевые архитектурные показатели;
-- план разработки (High-level);
-- экспертный вывод по реализации.
-
-## Детальное исследование технологий и плана
-(Интегрируй архитектуру, стек и roadmap)
-
-## Команда и риски
-(Интегрируй план найма и оценку рисков)
-
-## Итоговое обоснование реализации
-Технический вывод о готовности ИТ-системы к реализации.
-""".strip()
+- не используй шаблонные заглушки вроде "информация не предоставлена", если её можно вывести из материалов;
+- если информации действительно нет — коротко укажи gap и сразу предложи решение;
+- документ должен быть полезен как реальный handoff package;
+- executive summary должно быть коротким, но содержательным;
+- весь отчёт — без воды.
 
 ## Входные материалы
 
@@ -1506,255 +1490,6 @@ class DeepResearchSystem:
 
 
 # =============================================================================
-# ASYNC DEEP RESEARCH SYSTEM
-# =============================================================================
-
-class AsyncDeepResearchSystem:
-    """Native async version of deep research runner."""
-
-    def __init__(self, print_agent_outputs: bool = True, save_prompts: bool = True) -> None:
-        Config.validate()
-        self.print_agent_outputs = print_agent_outputs
-        self.save_prompts = save_prompts
-        self.client = AsyncYandexResponsesClient()
-        # Reuse prompt builders and extract helpers from original implementation.
-        self._sync = DeepResearchSystem(print_agent_outputs=print_agent_outputs, save_prompts=save_prompts)
-
-    def build_hr_prompt(self, state: Dict[str, Any]) -> str:
-        """Refined HR prompt to avoid medical filters."""
-        architecture = compact_text(state.get("architecture", ""), 3500)
-        roadmap = compact_text(state.get("roadmap", ""), 4500)
-        return f"""
-Ты работаешь в мультиагентной Deep Research системе.
-Задача: спроектировать структуру команды и план найма для реализации проекта.
-
-Важно:
-- проект уже принят;
-- ТЫ НЕ ДАЕШЬ ПЕРСОНАЛЬНЫХ РЕКОМЕНДАЦИЙ или медицинских советов;
-- твой фокус строго на ТЕХНОЛОГИЧЕСКОМ и ОРГАНИЗАЦИОННОМ планировании;
-- используй конкретные технологии из представленной архитектуры;
-- ответ должен быть строго аналитическим.
-
-## Описание проекта
-{state["project_description"]}
-
-## Архитектура
-{architecture}
-
-## Roadmap
-{roadmap}
-
-Подготовь Markdown со структурой: команда, роли, требования, стратегия найма, риски.
-""".strip()
-
-    def build_synthesis_prompt(self, state: Dict[str, Any]) -> str:
-        """Refined Synthesis prompt to avoid medical filters."""
-        analysis = compact_text(state.get("project_analysis", ""), 2500)
-        tech = compact_text(state.get("technical_research", ""), 3000)
-        architecture = compact_text(state.get("architecture", ""), 4500)
-        roadmap = compact_text(state.get("roadmap", ""), 5000)
-        
-        return f"""
-Ты работаешь в мультиагентной Deep Research системе.
-Задача: собрать весь технический и стратегический research в один ФИНАЛЬНЫЙ АНАЛИТИЧЕСКИЙ документ.
-
-Важно:
-- фокус строго на ТЕХНИЧЕСКИХ, АРХИТЕКТУРНЫХ и СТРАТЕГИЧЕСКИХ аспектах;
-- это НЕ медицинский совет и НЕ консультация пациента;
-- это аналитический отчет по разработке ИТ-продукта;
-- executive summary должно быть коротким, но содержательным.
-
-## Результаты исследований
-{analysis}
-{tech}
-{architecture}
-{roadmap}
-
-Нужно вернуть Markdown Deep Research Report с разделами: Executive Summary, Технические детали, Анализ рисков и реализации, Итоговое решение.
-""".strip()
-
-    async def run(
-        self,
-        project_description: str,
-        tracker_context: str = "",
-        source_craft_context: str = "",
-        artifact_dir: Optional[str] = None,
-        continue_on_agent_error: bool = False,
-        on_progress: Optional[Callable[[str, int], Any]] = None,
-    ) -> Dict[str, Any]:
-        if not project_description.strip():
-            raise ValueError("project_description пустой")
-
-        project_name = first_non_empty_line(project_description)
-        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        artifact_path = Path(artifact_dir) if artifact_dir else None
-        if artifact_path:
-            ensure_dir(artifact_path)
-            ensure_dir(artifact_path / "agent_outputs")
-            ensure_dir(artifact_path / "agent_prompts")
-
-        state: Dict[str, Any] = {
-            "run_id": run_id,
-            "started_at": now_iso(),
-            "project_name": project_name,
-            "project_description": project_description.strip(),
-            "tracker_context": tracker_context.strip(),
-            "source_craft_context": source_craft_context.strip(),
-            "project_analysis": "",
-            "research_strategy": "",
-            "technical_research": "",
-            "architecture": "",
-            "roadmap": "",
-            "team_plan": "",
-            "risk_assessment": "",
-            "quality_review": "",
-            "final_report": "",
-            "executive_summary": "",
-            "decision": "UNKNOWN",
-            "feasibility_score": None,
-            "quality_score": None,
-            "completeness_score": None,
-            "agent_outputs": {},
-            "agent_runs": [],
-        }
-
-        pipeline = [
-            ("project_analyst", self._sync.build_project_analyst_prompt, "project_analysis"),
-            ("research_strategist", self._sync.build_research_strategist_prompt, "research_strategy"),
-            ("technical_researcher", self._sync.build_technical_researcher_prompt, "technical_research"),
-            ("architect", self._sync.build_architect_prompt, "architecture"),
-            ("roadmap_manager", self._sync.build_roadmap_prompt, "roadmap"),
-            ("hr_specialist", self.build_hr_prompt, "team_plan"),
-            ("risk_analyst", self._sync.build_risk_prompt, "risk_assessment"),
-            ("quality_reviewer", self._sync.build_quality_prompt, "quality_review"),
-            ("synthesis_manager", self.build_synthesis_prompt, "final_report"),
-        ]
-
-        total_steps = len(pipeline)
-        for idx, (agent_name, prompt_builder, state_key) in enumerate(pipeline, start=1):
-            if on_progress:
-                try:
-                    p = int((idx / total_steps) * 100)
-                    if asyncio.iscoroutinefunction(on_progress):
-                        await on_progress(agent_name, p)
-                    else:
-                        on_progress(agent_name, p)
-                except Exception as e:
-                    print(f"Progress callback error: {e}")
-            try:
-                output = await self._run_agent(agent_name, prompt_builder(state), state, artifact_path)
-                state[state_key] = output
-                if agent_name == "risk_analyst":
-                    state["decision"] = extract_decision(output)
-                    state["feasibility_score"] = extract_score(output, ["ИТОГОВАЯ FEASIBILITY", "FEASIBILITY", "ИТОГОВАЯ ОЦЕНКА"])
-                if agent_name == "quality_reviewer":
-                    state["quality_score"] = extract_score(output, ["Оценка качества", "Качество", "Quality"])
-                    state["completeness_score"] = extract_score(output, ["Оценка полноты", "Полнота", "Completeness"])
-                if agent_name == "synthesis_manager":
-                    state["executive_summary"] = extract_executive_summary(output)
-                    if state["decision"] == "UNKNOWN":
-                        state["decision"] = extract_decision(output)
-            except Exception as exc:
-                if not continue_on_agent_error:
-                    raise
-                fallback_output = f"# {agent_name}\n\nОшибка выполнения агента.\n\n```\n{type(exc).__name__}: {exc}\n```"
-                state[state_key] = fallback_output
-                state["agent_outputs"][agent_name] = fallback_output
-
-        state["finished_at"] = now_iso()
-        state["duration_sec"] = self._sync._duration_seconds(state["started_at"], state["finished_at"])  # noqa: SLF001
-        result: Dict[str, Any] = {
-            "run_id": state["run_id"],
-            "project_name": state["project_name"],
-            "project_description": state["project_description"],
-            "tracker_context": state["tracker_context"],
-            "source_craft_context": state["source_craft_context"],
-            "started_at": state["started_at"],
-            "finished_at": state["finished_at"],
-            "duration_sec": state["duration_sec"],
-            "decision": state["decision"],
-            "feasibility_score": state["feasibility_score"],
-            "quality_score": state["quality_score"],
-            "completeness_score": state["completeness_score"],
-            "project_analysis": state["project_analysis"],
-            "research_strategy": state["research_strategy"],
-            "technical_research": state["technical_research"],
-            "architecture": state["architecture"],
-            "roadmap": state["roadmap"],
-            "team_plan": state["team_plan"],
-            "risk_assessment": state["risk_assessment"],
-            "quality_review": state["quality_review"],
-            "final_report": state["final_report"],
-            "executive_summary": state["executive_summary"],
-            "agent_outputs": state["agent_outputs"],
-            "agent_runs": state["agent_runs"],
-        }
-    # --- Progress Reporting logic redefined in AsyncDeepResearchSystem ---
-
-    def build_hr_prompt(self, state: Dict[str, Any]) -> str:
-        return self._sync.build_hr_prompt(state)
-
-    def build_synthesis_prompt(self, state: Dict[str, Any]) -> str:
-        return self._sync.build_synthesis_prompt(state)
-
-    async def _run_agent(
-        self,
-        agent_name: str,
-        prompt_text: str,
-        state: Dict[str, Any],
-        artifact_path: Optional[Path],
-    ) -> str:
-        cfg = Config.AGENTS[agent_name]
-        prompt_id = os.getenv(cfg.env_var, "").strip()
-        started = now_iso()
-        async def call_with_retries(p_text: str, is_retry: bool = False) -> Tuple[str, Dict[str, Any]]:
-            try:
-                text, data = await self.client.async_call(
-                    prompt_id=prompt_id,
-                    input_text=p_text,
-                    timeout_sec=cfg.timeout_sec,
-                    retries=cfg.retries,
-                )
-                
-                # Censorship detection (YandexGPT specific)
-                refusal_markers = ["я не могу обсуждать", "я не могу ответить", "извините, но я не", "дискредитирует", "нарушает правила"]
-                if any(marker in text.lower() for marker in refusal_markers) and not is_retry:
-                    print(f"  ⚠️ Censorship detected for {agent_name}. Attempting soft retry...")
-                    soft_prompt = f"### АНАЛИТИЧЕСКИЙ ЗАПРОС (БЕЗ МЕДИЦИНСКИХ СОВЕТОВ) ###\n\n{p_text}\n\nВАЖНО: Отвечай строго как технический аналитик ИТ-систем. Не давай советов по здоровью. Только архитектура, планирование и технологии."
-                    return await call_with_retries(soft_prompt, is_retry=True)
-                
-                return text, data
-            except Exception:
-                raise
-
-        output_text, response_data = await call_with_retries(prompt_text)
-        finished = now_iso()
-        duration = self._sync._duration_seconds(started, finished)  # noqa: SLF001
-        run = AgentRun(
-            index=len(state["agent_runs"]) + 1,
-            agent_name=agent_name,
-            prompt_id=prompt_id,
-            started_at=started,
-            finished_at=finished,
-            duration_sec=duration,
-            input_text=prompt_text,
-            output_text=output_text,
-            success=True,
-            response_id=response_data.get("id") if isinstance(response_data, dict) else None,
-            response_status=response_data.get("status") if isinstance(response_data, dict) else None,
-            usage=response_data.get("usage") if isinstance(response_data, dict) else None,
-        )
-        state["agent_runs"].append(asdict(run))
-        state["agent_outputs"][agent_name] = output_text
-        if artifact_path:
-            stage_idx = len(state["agent_runs"])
-            if self.save_prompts:
-                safe_write(artifact_path / "agent_prompts" / f"{stage_idx:02d}_{agent_name}_prompt.md", prompt_text)
-            safe_write(artifact_path / "agent_outputs" / f"{stage_idx:02d}_{agent_name}.md", output_text)
-        return output_text
-
-
-# =============================================================================
 # CONVENIENCE FUNCTIONS
 # =============================================================================
 
@@ -1776,29 +1511,6 @@ def run_deep_research(
         source_craft_context=source_craft_context,
         artifact_dir=artifact_dir,
         continue_on_agent_error=continue_on_agent_error,
-    )
-
-
-async def run_deep_research_async(
-    project_description: str,
-    tracker_context: str = "",
-    source_craft_context: str = "",
-    artifact_dir: Optional[str] = None,
-    print_agent_outputs: bool = True,
-    continue_on_agent_error: bool = False,
-    on_progress: Optional[Callable[[str, int], Any]] = None,
-) -> Dict[str, Any]:
-    system = AsyncDeepResearchSystem(
-        print_agent_outputs=print_agent_outputs,
-        save_prompts=Config.SAVE_FULL_PROMPTS,
-    )
-    return await system.run(
-        project_description=project_description,
-        tracker_context=tracker_context,
-        source_craft_context=source_craft_context,
-        artifact_dir=artifact_dir,
-        continue_on_agent_error=continue_on_agent_error,
-        on_progress=on_progress,
     )
 
 
@@ -1840,7 +1552,7 @@ def print_summary(result: Dict[str, Any]) -> None:
 
 if __name__ == "__main__":
     project = """
-HISTOSCAN - комплекс программных продуктов для врачей-патологов, который позволяет
+HISTOSCAN — комплекс программных продуктов для врачей-патологов, который позволяет
 управлять, хранить и обмениваться цифровыми изображениями микроскопических
 и макроскопических исследований.
 

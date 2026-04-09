@@ -24,6 +24,7 @@ class ApplicationResponse(BaseModel):
     status: ApplicationStatus
     scorecard: dict | None
     summary: str | None
+    intake_details: dict | None = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
@@ -40,6 +41,7 @@ class IntakeResult(BaseModel):
     clarifying_questions: list[str]
     summary: str
     recommended_action: Literal["approve", "reject", "clarify"]
+    intake_details: dict | None = None
 
 
 class ResearchReport(BaseModel):
@@ -63,3 +65,4 @@ class ResearchReport(BaseModel):
     duration_sec: float | None = None
     agents_completed: int | None = None
     agents_total: int | None = None
+    agent_outputs: dict | None = None

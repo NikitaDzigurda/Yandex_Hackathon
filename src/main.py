@@ -12,12 +12,39 @@ from redis.asyncio import Redis
 from sqlalchemy import text
 
 from agents.orchestrator import Orchestrator
-from api.router import api_router
+from api.auth import router as auth_router
+from api.messages import router as messages_router
+from api.projects import router as projects_router
+from api.runs import router as runs_router
+from api.showcase import router as showcase_router
+from api.telegram_admin import router as telegram_admin_router
 from core.config import settings
 from db.base import Base
 from db.base import engine
+from db.base import AsyncSessionLocal
+from db.models import User, UserRole
+from core.security import get_password_hash
 from integrations.tracker import TrackerClient
 from integrations.yandex_cloud import YandexCloudAgentClient
+
+
+async def _seed_admin() -> None:
+    """Create a default admin user on first startup if none exist."""
+    from sqlalchemy import select
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(User).where(User.email == "admin@example.com"))
+        if result.scalar_one_or_none() is None:
+            admin = User(
+                email="admin@example.com",
+                full_name="Admin",
+                hashed_password=get_password_hash("secret123"),
+                role=UserRole.admin,
+                is_active=True,
+            )
+            session.add(admin)
+            await session.commit()
+            import logging
+            logging.getLogger(__name__).info("Seeded default admin user: admin@example.com / secret123")
 
 
 @asynccontextmanager
@@ -27,6 +54,7 @@ async def lifespan(_: FastAPI):
         await connection.execute(text("SELECT 1"))
         # Dev-safe fallback: ensure schema exists even if migrations were skipped.
         await connection.run_sync(Base.metadata.create_all)
+    await _seed_admin()
     orchestrator_task = asyncio.create_task(orchestrator.run())
     yield
     orchestrator_task.cancel()
@@ -47,7 +75,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(api_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(projects_router, prefix="/api/projects", tags=["projects"])
+app.include_router(runs_router, prefix="/api/projects", tags=["runs"])
+app.include_router(messages_router, prefix="/api/projects", tags=["messages"])
+app.include_router(showcase_router, prefix="/api/showcase", tags=["showcase"])
+app.include_router(telegram_admin_router, prefix="/api/admin", tags=["admin"])
 
 
 @app.get("/health")
